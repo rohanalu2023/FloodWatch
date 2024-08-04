@@ -1,0 +1,105 @@
+import boto3
+import pandas as pd
+import numpy as np
+from io import StringIO
+from datetime import datetime
+import json
+import logging
+
+# Initialize AWS clients
+s3 = boto3.client('s3')
+sns = boto3.client('sns')
+
+# S3 bucket and object details
+bucket_name = 'floodwatchmodelresults'
+s3_key = 'model_results.csv'
+output_bucket_name = 'flood-watch-images'
+sns_arn = 'arn:aws:sns:us-east-1:624989446898:Flooddetected:3f95cfe6-e3d1-4c58-a7ef-6020667a2d77'
+
+# Set up logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def create_bucket_if_not_exists(bucket_name):
+    """Create an S3 bucket if it doesn't exist."""
+    try:
+        s3.head_bucket(Bucket=bucket_name)
+    except:
+        s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={
+            'LocationConstraint': boto3.session.Session().region_name})
+        logger.info(f"Created bucket: {bucket_name}")
+
+def lambda_handler(event, context):
+    try:
+        # Load the CSV file from S3
+        response = s3.get_object(Bucket=bucket_name, Key=s3_key)
+        csv_content = response['Body'].read().decode('utf-8')
+        data = pd.read_csv(StringIO(csv_content))
+
+        # Check for floods
+        flood_detected = (data['Flood'] == 1).any()
+
+        # Generate summary information if flood detected
+        if flood_detected:
+            timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%SZ')
+            folder_name = f'FloodSummary_{timestamp}'
+
+            # Summary of water levels
+            water_level_summary = data[[f"Water Level P{i} (m)" for i in range(1, 18)]].describe().to_string()
+
+            # Average water level
+            data['Average Water Level (m)'] = data[[f"Water Level P{i} (m)" for i in range(1, 18)]].mean(axis=1)
+            avg_water_level = data['Average Water Level (m)'].mean()
+            
+            # Maximum discharge
+            cross_sectional_area = 10  # Assume constant cross-sectional area
+            data['Discharge (m³/s)'] = cross_sectional_area * data['Average Water Level (m)']
+            max_discharge = data['Discharge (m³/s)'].max()
+
+            # Save the summary data as a text file in S3
+            summary_content = (
+                f"Flood Detection Summary\n\n"
+                f"Timestamp: {timestamp}\n\n"
+                f"Average Water Level (m): {avg_water_level:.2f}\n"
+                f"Maximum Discharge (m³/s): {max_discharge:.2f}\n\n"
+                f"Water Levels Summary:\n\n{water_level_summary}\n"
+            )
+
+            # Ensure the bucket exists
+            create_bucket_if_not_exists(output_bucket_name)
+
+            # Upload the summary to the S3 bucket
+            s3.put_object(Bucket=output_bucket_name, Key=f'{folder_name}/flood_summary.txt', Body=summary_content)
+
+            # Prepare SNS notification
+            subject = 'Flood Detected: Immediate Action Required'
+            body = (
+                "Dear Recipient,\n\n"
+                "We have detected a potential flood based on the latest data. "
+                "A summary of water levels and maximum discharge has been generated and saved to S3. "
+                "Please review the summary and take appropriate actions.\n\n"
+                "Best regards,\nFlood Watch Team"
+            )
+
+            # Log the message details for debugging
+            logger.info(f"Sending SNS notification: Subject={subject}, Body={body}")
+
+            # Send SNS notification
+            sns.publish(
+                TopicArn=sns_arn,
+                Subject=subject,
+                Message=body
+            )
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps('Flood detection check complete.')
+        }
+
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Error: {error_message}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f'Error: {error_message}')
+        }

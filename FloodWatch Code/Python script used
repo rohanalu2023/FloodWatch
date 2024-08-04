@@ -1,0 +1,124 @@
+import csv
+import random
+import datetime
+import boto3
+from botocore.exceptions import NoCredentialsError
+
+# Parameters
+num_days = 5  # Duration of the data simulation
+location = "Port Louis"
+output_csv = "flash_flood_data.csv"
+upload_to_s3 = False
+s3_bucket = "sensordata-s2023360"
+s3_key = "flash_flood_data.csv"
+num_points = 17  # Number of measurement points along the canal
+
+# Function to determine the season
+def determine_season(month):
+    if month in [12, 1, 2]:
+        return "Summer"
+    else:
+        return "Winter"
+
+# Function to generate random water levels for each point
+def generate_water_levels(num_points, base_level, peak_level, time_elapsed, max_delay):
+    water_levels = []
+    for point in range(num_points):
+        delay = min(time_elapsed, max_delay)  # Simulate delay in water reaching each point
+        peak_adjustment = peak_level * (delay / max_delay)
+        water_level = round(random.uniform(base_level + point * 0.1, peak_adjustment - point * 0.1), 2)
+        water_levels.append(water_level)
+    return water_levels
+
+# Function to generate soil saturation level
+def generate_soil_saturation(rainfall, water_levels):
+    base_saturation = random.uniform(0.3, 0.7)  # Base saturation level between 30% and 70%
+    rainfall_factor = rainfall / 200  # Normalizing rainfall to influence saturation
+    water_level_factor = max(water_levels) / 5  # Normalizing water level to influence saturation
+    saturation = base_saturation + rainfall_factor + water_level_factor
+    return round(min(saturation, 1.0), 2)  # Cap saturation at 1.0 (100%)
+
+# Function to generate incremental rainfall
+def incremental_rainfall(time, peak_time, peak_rainfall):
+    if time <= peak_time:
+        return round(peak_rainfall * (time / peak_time), 2)
+    else:
+        return round(peak_rainfall * ((24 * 60 - time) / (24 * 60 - peak_time)), 2)
+
+# Function to generate random data
+def generate_flash_flood_data(num_days, num_points):
+    data = []
+    base_date = datetime.datetime(2024, 1, 1, 0, 0)  # Start from January 1, 2024
+    peak_rainfall = 200  # Max rainfall at peak
+    peak_time = 12 * 60  # Peak at midday (12 hours into the day)
+    max_delay = 45  # Maximum delay for water level propagation from P1 to P17
+
+    # Simulate a flash flood scenario
+    for day in range(num_days):
+        for minutes in range(0, 24 * 60, 15):  # Every 15 minutes
+            timestamp = (base_date + datetime.timedelta(days=day, minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+            year = base_date.year
+            month = base_date.month
+            day_of_month = base_date.day + day
+            hour = minutes // 60
+            minute = minutes % 60
+            
+            if day == 2:  # Simulate flash flood on January 3rd
+                rainfall = incremental_rainfall(minutes, peak_time, peak_rainfall)
+                water_levels = generate_water_levels(num_points, base_level=0, peak_level=5 * (rainfall / peak_rainfall), time_elapsed=minutes, max_delay=max_delay)
+            else:  # Normal weather conditions
+                rainfall = round(random.uniform(0, 5), 2)  # Light rain or no rain
+                water_levels = generate_water_levels(num_points, base_level=0, peak_level=0.5, time_elapsed=minutes, max_delay=max_delay)
+
+            # Generate soil saturation level
+            soil_saturation = generate_soil_saturation(rainfall, water_levels)
+
+            # Weather conditions
+            temperature = round(random.uniform(25, 35), 2)  # Celsius
+            humidity = round(random.uniform(70, 100), 2)  # Percentage
+            wind_speed = round(random.uniform(5, 25), 2)  # km/h
+
+            # Additional columns
+            season = determine_season(month)
+            deforestation = round(random.uniform(0, 1), 2)
+            urbanisation = round(random.uniform(0, 1), 2)
+            climate_change_impact = round(random.uniform(0.5, 1), 2)
+            coastal_vulnerability = round(random.uniform(0.8, 1), 2) if minutes == 45 else round(random.uniform(0.2, 0.5), 2)
+            population_score = round(random.uniform(0.5, 1), 2) if location == "Port Louis" else round(random.uniform(0, 0.5), 2)
+            topography_drainage = round(random.uniform(0, 1), 2)
+
+            # Combine all data into one row, placing water levels last
+            row = [year, month, day_of_month, hour, minute, season, location, rainfall, soil_saturation, temperature, humidity, wind_speed, deforestation, urbanisation, climate_change_impact, coastal_vulnerability, population_score, topography_drainage] + water_levels
+            data.append(row)
+
+    return data
+
+# Function to save data to CSV
+def save_to_csv(data, filename, num_points):
+    header = ["Year", "Month", "Day", "Hour", "Minute", "Season", "Location", "Rainfall (mm)", "Soil Saturation (%)", "Temperature (°C)", "Humidity (%)", "Wind Speed (km/h)", "Deforestation", "Urbanisation", "Climate Change Impact", "Coastal Vulnerability", "Population Score", "Topography Drainage"] + [f"Water Level P{i+1} (m)" for i in range(num_points)]
+    with open(filename, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(header)
+        writer.writerows(data)
+
+# Function to upload to AWS S3
+def upload_to_s3(bucket, key, filename):
+    s3 = boto3.client('s3')
+    try:
+        s3.upload_file(filename, bucket, key)
+        print(f"File uploaded to S3: {bucket}/{key}")
+    except FileNotFoundError:
+        print("The file was not found.")
+    except NoCredentialsError:
+        print("Credentials not available.")
+
+# Generate data
+sensor_data = generate_flash_flood_data(num_days, num_points)
+
+# Save data to CSV
+save_to_csv(sensor_data, output_csv, num_points)
+print(f"Data saved to {output_csv}")
+
+# Upload to S3 if enabled
+if upload_to_s3:
+    upload_to_s3(s3_bucket, s3_key, output_csv)
