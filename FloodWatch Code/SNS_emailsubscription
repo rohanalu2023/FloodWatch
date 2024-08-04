@@ -1,0 +1,39 @@
+import boto3
+
+# Initialize the Amazon Simple Notification Service (SNS) client
+sns = boto3.client('sns')
+
+def subscribe_email_to_topic(email_address, topic_arn):
+    """
+    This function subscribes an email address to an SNS topic.
+
+    Parameters:
+    email_address (str): The email address to subscribe to the topic.
+    topic_arn (str): The Amazon Resource Name (ARN) of the SNS topic.
+
+    Returns:
+    bool: True if the subscription was successful, False otherwise.
+    """
+
+    try:
+        # Attempt to subscribe the email address to the topic
+        response = sns.subscribe(
+            TopicArn=topic_arn,
+            Protocol='email',
+            Endpoint=email_address
+        )
+
+        # If the subscription was successful, print a success message and return True
+        print("Subscribed email address to topic:", response)
+        return True
+    except Exception as e:
+        # If the subscription failed, print an error message and return False
+        print("Error subscribing email address to topic:", e)
+        return False
+
+# Example usage
+email_address = "r.jankee@alustudent.com"
+topic_arn = "arn:aws:sns:us-east-1:624989446898:Flooddetected"
+
+# Call the function with the example email address and topic ARN
+subscribe_email_to_topic(email_address, topic_arn)
